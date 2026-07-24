@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sphere Runner 3D 🟢💨</title>
+  <style>
+    body {
+      margin: 0; overflow: hidden; background: #0f172a;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+    }
+
+    /* Interface HUD par-dessus la 3D */
+    #ui {
+      position: absolute; top: 20px; left: 20px;
+      color: white; font-weight: bold; font-size: 20px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+
+    #game-over {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(15, 23, 42, 0.95); border: 3px solid #ef4444;
+      border-radius: 16px; padding: 30px; text-align: center;
+      color: white; display: none; box-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
+    }
+
+    #game-over h1 { margin: 0 0 10px 0; color: #ef4444; font-size: 32px; }
+    #game-over p { font-size: 18px; margin-bottom: 20px; }
+
+    .btn-restart {
+      background: #22c55e; color: white; border: none;
+      padding: 12px 24px; border-radius: 30px; font-weight: bold;
+      font-size: 16px; cursor: pointer; box-shadow: 0 4px 0 #15803d;
+      transition: transform 0.1s;
+    }
+    .btn-restart:active { transform: translateY(2px); box-shadow: 0 2px 0 #15803d; }
+  </style>
+
+  <!-- Moteur 3D Three.js chargé directement depuis le web -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <div id="ui">
+    🏆 Score : <span id="scoreText">0</span>m | 💎 Gemmes : <span id="gemsText">0</span>
+  </div>
+
+  <div id="game-over">
+    <h1>CRASH ! 💥</h1>
+    <p>Ton Score : <span id="finalScore">0</span>m</p>
+    <button class="btn-restart" onclick="restartGame()">🔄 Recommencer</button>
+  </div>
+
+  <script>
+    // --- 1. CONFIGURATION DE LA SCÈNE 3D ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a); // Fond sombre élégant
+    scene.fog = new THREE.FogExp2(0x0f172a, 0.015); // Brouillard au loin pour l'ambiance
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true; // Activer les ombres
+    document.body.appendChild(renderer.domElement);
+
+    // --- 2. LUMIÈRES ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // --- 3. CRÉATION DE LA PISTE ET DU JOUEUR ---
+    // Les 3 voies : Gauche (-3), Centre (0), Droite (3)
+    const lanes = [-3, 0, 3];
+    let currentLaneIdx = 1; // Commence au milieu
+
+    // Piste
+    const trackGeo = new THREE.BoxGeometry(10, 1, 1000);
+    const trackMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4 });
+    const track = new THREE.Mesh(trackGeo, trackMat);
+    track.position.set(0, -0.5, -450);
+    track.receiveShadow = true;
+    scene.add(track);
+
+    // Joueur (La Sphère 3D)
+    const sphereGeo = new THREE.SphereGeometry(0.8, 32, 32);
+    const sphereMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.2, metalness: 0.5 });
+    const player = new THREE.Mesh(sphereGeo, sphereMat);
+    player.position.set(lanes[currentLaneIdx], 0.8, 0);
+    player.castShadow = true;
+    scene.add(player);
+
+    // --- 4. ETATS DU JEU ---
+    let gameSpeed = 0.4;
+    let distance = 0;
+    let gemsCount = 0;
+    let isGameOver = false;
+
+    let obstacles = [];
+    let gems = [];
+
+    // --- 5. GÉNÉRATION DE L'ENVIRONNEMENT ---
+    function spawnObstacle(zPos) {
+      const lane = lanes[Math.floor(Math.random() * lanes.length)];
+      const boxGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
+      const boxMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.3 });
+      const obstacle = new THREE.Mesh(boxGeo, boxMat);
+      obstacle.position.set(lane, 0.8, zPos);
+      obstacle.castShadow = true;
+      scene.add(obstacle);
+      obstacles.push(obstacle);
+    }
+
+    function spawnGem(zPos) {
+      const lane = lanes[Math.floor(Math.random() * lanes.length)];
+      const gemGeo = new THREE.OctahedronGeometry(0.5);
+      const gemMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.1, metalness: 0.8 });
+      const gem = new THREE.Mesh(gemGeo, gemMat);
+      gem.position.set(lane, 1.0, zPos);
+      gem.castShadow = true;
+      scene.add(gem);
+      gems.push(gem);
+    }
+
+    // Générer les premiers éléments au loin
+    for (let z = -30; z > -400; z -= 18) {
+      if (Math.random() > 0.3) spawnObstacle(z);
+      else spawnGem(z);
+    }
+
+    // --- 6. CONTRÔLES DU JOUEUR ---
+    window.addEventListener('keydown', (e) => {
+      if (isGameOver) return;
+
+      if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && currentLaneIdx > 0) {
+        currentLaneIdx--;
+      } else if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && currentLaneIdx < 2) {
+        currentLaneIdx++;
+      }
+    });
+
+    // --- 7. BOUCLE DE JEU (GAME LOOP 3D) ---
+    function animate() {
+      if (!isGameOver) {
+        requestAnimationFrame(animate);
+
+        // Déplacement fluide vers la voie sélectionnée
+        const targetX = lanes[currentLaneIdx];
+        player.position.x += (targetX - player.position.x) * 0.15;
+
+        // Effet de roulement de la sphère
+        player.rotation.x -= gameSpeed * 0.5;
+
+        // Vitesse progressive
+        gameSpeed += 0.0001;
+        distance += gameSpeed;
+
+        // Mettre à jour l'UI
+        document.getElementById('scoreText').innerText = Math.floor(distance);
+
+        // Position de la caméra (Derrière et un peu au-dessus)
+        camera.position.set(player.position.x * 0.3, 4, player.position.z + 8);
+        camera.lookAt(player.position.x * 0.3, 1, player.position.z - 5);
+
+        // Déplacer et vérifier les Obstacles
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          let obs = obstacles[i];
+          obs.position.z += gameSpeed * 20;
+
+          // Collision Balle vs Cube
+          let dist = player.position.distanceTo(obs.position);
+          if (dist < 1.4) {
+            triggerGameOver();
+          }
+
+          // Recycler l'obstacle s'il est dépassé
+          if (obs.position.z > 10) {
+            scene.remove(obs);
+            obstacles.splice(i, 1);
+            spawnObstacle(-400);
+          }
+        }
+
+        // Déplacer et vérifier les Gemmes
+        for (let i = gems.length - 1; i >= 0; i--) {
+          let g = gems[i];
+          g.position.z += gameSpeed * 20;
+          g.rotation.y += 0.05; // La gemme tourne sur elle-même
+
+          // Ramasser la gemme
+          let dist = player.position.distanceTo(g.position);
+          if (dist < 1.3) {
+            scene.remove(g);
+            gems.splice(i, 1);
+            gemsCount++;
+            document.getElementById('gemsText').innerText = gemsCount;
+            spawnGem(-400);
+          } else if (g.position.z > 10) {
+            scene.remove(g);
+            gems.splice(i, 1);
+            spawnGem(-400);
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function triggerGameOver() {
+      isGameOver = true;
+      document.getElementById('finalScore').innerText = Math.floor(distance);
+      document.getElementById('game-over').style.display = 'block';
+    }
+
+    function restartGame() {
+      // Nettoyer les objets
+      obstacles.forEach(o => scene.remove(o));
+      gems.forEach(g => scene.remove(g));
+      obstacles = [];
+      gems = [];
+
+      // Réinitialiser les variables
+      currentLaneIdx = 1;
+      player.position.x = lanes[1];
+      gameSpeed = 0.4;
+      distance = 0;
+      gemsCount = 0;
+      isGameOver = false;
+
+      document.getElementById('gemsText').innerText = '0';
+      document.getElementById('game-over').style.display = 'none';
+
+      // Régénérer le terrain
+      for (let z = -30; z > -400; z -= 18) {
+        if (Math.random() > 0.3) spawnObstacle(z);
+        else spawnGem(z);
+      }
+
+      animate();
+    }
+
+    // Redimensionnement de la fenêtre
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Lancer le jeu !
+    animate();
+  </script>
+</body>
+</html>
